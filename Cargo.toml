@@ -1,6 +1,6 @@
 [workspace]
 members = [
-    "server",
+    "mock_server",
     "client",
 ]
 resolver = "2"

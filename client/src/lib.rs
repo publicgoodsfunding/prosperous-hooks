@@ -39,6 +39,32 @@ pub fn resolve_auth_state() -> AuthState {
     AuthState::NotLoggedIn
 }
 
+pub async fn exchange_api_key(server_url: &str, api_key: &str) -> Option<String> {
+    use bytes::Bytes;
+    use http_body_util::{BodyExt, Full};
+    use hyper::Request;
+    use hyper_util::client::legacy::Client;
+    use hyper_util::rt::TokioExecutor;
+
+    let url = format!("{}/auth/exchange", server_url.trim_end_matches('/'));
+    let uri: hyper::Uri = url.parse().ok()?;
+
+    let body = serde_json::json!({"api_key": api_key}).to_string();
+    let req = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("Content-Type", "application/json")
+        .body(Full::new(Bytes::from(body)))
+        .ok()?;
+
+    let client = Client::builder(TokioExecutor::new()).build_http();
+    let res = client.request(req).await.ok()?;
+
+    let bytes = res.into_body().collect().await.ok()?.to_bytes();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+    Some(json["token"].as_str()?.to_owned())
+}
+
 fn find_token_file() -> Option<String> {
     let home = dirs::home_dir();
     let mut current = std::env::current_dir().ok()?;
@@ -67,7 +93,7 @@ fn find_token_file() -> Option<String> {
     None
 }
 
-fn parse_jwt_claims(token: &str) -> Option<TokenClaims> {
+pub fn parse_jwt_claims(token: &str) -> Option<TokenClaims> {
     let parts: Vec<&str> = token.splitn(4, '.').collect();
     if parts.len() != 3 {
         return None;

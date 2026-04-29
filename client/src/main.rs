@@ -1,41 +1,63 @@
-use client::{resolve_auth_state, AuthState};
-use http_body_util::BodyExt;
-use hyper::Request;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use client::{AuthState, ClientError, ClientOptions, ProsperousClient};
 
 #[tokio::main]
 async fn main() {
-    match resolve_auth_state() {
-        AuthState::NotLoggedIn => eprintln!("Auth: not logged in"),
-        AuthState::HasApiKey(_) => println!("Auth: API key found, token exchange required"),
-        AuthState::LoggedInCurrent(c) => {
-            println!("Auth: logged in as {} (org: {})", c.email, c.org_id)
+    let options = parse_options();
+    let mut client = ProsperousClient::new(options);
+
+    match client.initialize().await {
+        Ok(()) => {
+            if let AuthState::LoggedInCurrent(claims) = client.state() {
+                println!("Logged in as {} (org: {})", claims.email, claims.org_id);
+            }
         }
-        AuthState::LoggedInExpired(c) => {
-            eprintln!("Auth: token expired for {} (org: {})", c.email, c.org_id)
+        Err(ClientError::NotLoggedIn) => {
+            eprintln!("Error: not logged in. Provide --prosperous-key or set PROSPEROUS_KEY.");
+            std::process::exit(1);
+        }
+        Err(ClientError::TokenExpired(claims)) => {
+            eprintln!(
+                "Error: token expired for {}. Provide --prosperous-key to reauthenticate.",
+                claims.email
+            );
+            std::process::exit(1);
+        }
+        Err(ClientError::ExchangeFailed) => {
+            eprintln!("Error: API key exchange failed. Check your key and --base-url.");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn parse_options() -> ClientOptions {
+    let args: Vec<String> = std::env::args().collect();
+    let mut prosperous_key: Option<String> = None;
+    let mut base_url: Option<String> = None;
+
+    for arg in &args[1..] {
+        if let Some(v) = arg.strip_prefix("--prosperous-key=") {
+            prosperous_key = Some(v.to_owned());
+        } else if let Some(v) = arg.strip_prefix("--base-url=") {
+            base_url = Some(v.to_owned());
         }
     }
 
-    let url = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "http://127.0.0.1:3000/".to_string());
+    // Fall back to environment variables when flags are not provided.
+    if prosperous_key.is_none() {
+        prosperous_key = std::env::var("PROSPEROUS_KEY")
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
+    }
+    if base_url.is_none() {
+        base_url = std::env::var("PROSPEROUS_BASE_URL")
+            .ok()
+            .map(|s| s.trim().to_owned())
+            .filter(|s| !s.is_empty());
+    }
 
-    let uri: hyper::Uri = url.parse().expect("invalid URL");
-
-    let client = Client::builder(TokioExecutor::new()).build_http();
-
-    let req = Request::builder()
-        .uri(&uri)
-        .body(http_body_util::Empty::<bytes::Bytes>::new())
-        .unwrap();
-
-    let res = client.request(req).await.expect("request failed");
-
-    println!("Status: {}", res.status());
-
-    let body = res.into_body().collect().await.expect("failed to read body");
-    let bytes = body.to_bytes();
-    let body = String::from_utf8_lossy(&bytes);
-    println!("Body: {body}");
+    ClientOptions {
+        prosperous_key,
+        base_url,
+    }
 }

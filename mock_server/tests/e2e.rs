@@ -1,7 +1,7 @@
 use std::future::IntoFuture;
 
 use bytes::Bytes;
-use client::{exchange_api_key, parse_jwt_claims};
+use client::{AuthState, ClientError, ClientOptions, ProsperousClient, parse_jwt_claims};
 use http_body_util::{BodyExt, Full};
 use hyper::Request;
 use hyper_util::client::legacy::Client;
@@ -90,27 +90,40 @@ async fn oauth_token_rejects_empty_code() {
     assert_eq!(status, 400);
 }
 
-// --- Client library round-trip ---
+// --- ProsperousClient round-trip ---
 
 #[tokio::test]
-async fn client_exchange_api_key_returns_parseable_jwt() {
+async fn client_initialize_with_api_key_returns_ok() {
     let base = start_mock_server().await;
-    let token = exchange_api_key(&base, "my-test-key").await;
-    assert!(token.is_some(), "exchange_api_key should return a token");
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("my-test-key".to_owned()),
+        base_url: Some(base),
+    });
 
-    let claims = parse_jwt_claims(token.as_deref().unwrap());
-    assert!(claims.is_some(), "token should be a valid JWT with claims");
+    assert!(client.initialize().await.is_ok());
 
-    let claims = claims.unwrap();
+    let claims = match client.state() {
+        AuthState::LoggedInCurrent(c) => c,
+        other => panic!("expected LoggedInCurrent, got {other:?}"),
+    };
     assert_eq!(claims.email, "user@example.com");
     assert_eq!(claims.org_id, "test-org");
 }
 
 #[tokio::test]
-async fn exchanged_token_is_not_expired() {
+async fn initialized_token_is_not_expired() {
     let base = start_mock_server().await;
-    let token = exchange_api_key(&base, "my-test-key").await.unwrap();
-    let claims = parse_jwt_claims(&token).unwrap();
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("my-test-key".to_owned()),
+        base_url: Some(base),
+    });
+
+    client.initialize().await.unwrap();
+
+    let claims = match client.state() {
+        AuthState::LoggedInCurrent(c) => c,
+        other => panic!("expected LoggedInCurrent, got {other:?}"),
+    };
 
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -121,8 +134,27 @@ async fn exchanged_token_is_not_expired() {
 }
 
 #[tokio::test]
-async fn client_exchange_with_empty_key_returns_none() {
+async fn initialize_with_empty_key_returns_not_logged_in() {
     let base = start_mock_server().await;
-    let token = exchange_api_key(&base, "").await;
-    assert!(token.is_none(), "empty api key should not return a token");
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("".to_owned()),
+        base_url: Some(base),
+    });
+
+    assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));
+}
+
+#[tokio::test]
+async fn parse_jwt_claims_round_trips_server_token() {
+    let base = start_mock_server().await;
+    let (_, body) = post_json(
+        &format!("{base}/auth/exchange"),
+        serde_json::json!({"api_key": "any-key"}),
+    )
+    .await;
+
+    let token = body["token"].as_str().unwrap();
+    let claims = parse_jwt_claims(token).expect("token from server should be parseable");
+    assert_eq!(claims.email, "user@example.com");
+    assert_eq!(claims.org_id, "test-org");
 }

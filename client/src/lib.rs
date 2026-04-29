@@ -2,6 +2,11 @@ use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
+use bytes::Bytes;
+use http_body_util::{BodyExt, Full};
+use hyper::Request;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 
 #[derive(Debug, Clone)]
 pub struct TokenClaims {
@@ -18,51 +23,125 @@ pub enum AuthState {
     LoggedInExpired(TokenClaims),
 }
 
-pub fn resolve_auth_state() -> AuthState {
-    if let Some(token) = find_token_file() {
-        if let Some(claims) = parse_jwt_claims(&token) {
-            return if is_expired(claims.exp) {
-                AuthState::LoggedInExpired(claims)
-            } else {
-                AuthState::LoggedInCurrent(claims)
-            };
-        }
-    }
-
-    if let Ok(key) = std::env::var("PROSPEROUS_KEY") {
-        let key = key.trim().to_owned();
-        if !key.is_empty() {
-            return AuthState::HasApiKey(key);
-        }
-    }
-
-    AuthState::NotLoggedIn
+#[derive(Debug)]
+pub enum ClientError {
+    NotLoggedIn,
+    TokenExpired(TokenClaims),
+    ExchangeFailed,
 }
 
-pub async fn exchange_api_key(server_url: &str, api_key: &str) -> Option<String> {
-    use bytes::Bytes;
-    use http_body_util::{BodyExt, Full};
-    use hyper::Request;
-    use hyper_util::client::legacy::Client;
-    use hyper_util::rt::TokioExecutor;
+pub struct ClientOptions {
+    pub prosperous_key: Option<String>,
+    pub base_url: Option<String>,
+}
 
-    let url = format!("{}/auth/exchange", server_url.trim_end_matches('/'));
-    let uri: hyper::Uri = url.parse().ok()?;
+pub struct ProsperousClient {
+    options: ClientOptions,
+    state: AuthState,
+}
 
-    let body = serde_json::json!({"api_key": api_key}).to_string();
-    let req = Request::builder()
-        .method("POST")
-        .uri(&uri)
-        .header("Content-Type", "application/json")
-        .body(Full::new(Bytes::from(body)))
-        .ok()?;
+impl ProsperousClient {
+    pub fn new(options: ClientOptions) -> Self {
+        ProsperousClient {
+            options,
+            state: AuthState::NotLoggedIn,
+        }
+    }
 
-    let client = Client::builder(TokioExecutor::new()).build_http();
-    let res = client.request(req).await.ok()?;
+    pub fn state(&self) -> &AuthState {
+        &self.state
+    }
 
-    let bytes = res.into_body().collect().await.ok()?.to_bytes();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-    Some(json["token"].as_str()?.to_owned())
+    pub async fn initialize(&mut self) -> Result<(), ClientError> {
+        // 1. Check for a cached JWT token on disk.
+        if let Some(token_str) = find_token_file() {
+            if let Some(claims) = parse_jwt_claims(&token_str) {
+                if !is_expired(claims.exp) {
+                    self.state = AuthState::LoggedInCurrent(claims);
+                    return Ok(());
+                }
+
+                // Token is expired — try to refresh if we have an API key.
+                if let Some(key) = self.effective_api_key() {
+                    return match self.do_exchange(&key).await {
+                        Some(new_token) if parse_jwt_claims(&new_token).is_some() => {
+                            let new_claims = parse_jwt_claims(&new_token).unwrap();
+                            self.state = AuthState::LoggedInCurrent(new_claims);
+                            Ok(())
+                        }
+                        _ => {
+                            self.state = AuthState::LoggedInExpired(claims);
+                            Err(ClientError::ExchangeFailed)
+                        }
+                    };
+                }
+
+                self.state = AuthState::LoggedInExpired(claims.clone());
+                return Err(ClientError::TokenExpired(claims));
+            }
+        }
+
+        // 2. No usable cached token — try exchanging an API key for one.
+        if let Some(key) = self.effective_api_key() {
+            self.state = AuthState::HasApiKey(key.clone());
+            return match self.do_exchange(&key).await {
+                Some(token) if parse_jwt_claims(&token).is_some() => {
+                    let claims = parse_jwt_claims(&token).unwrap();
+                    self.state = AuthState::LoggedInCurrent(claims);
+                    Ok(())
+                }
+                _ => {
+                    self.state = AuthState::NotLoggedIn;
+                    Err(ClientError::ExchangeFailed)
+                }
+            };
+        }
+
+        // 3. No credentials available at all.
+        self.state = AuthState::NotLoggedIn;
+        Err(ClientError::NotLoggedIn)
+    }
+
+    // Returns the API key from options, falling back to the PROSPEROUS_KEY env var.
+    // If options.prosperous_key is explicitly set (even to empty), the env var is not consulted.
+    fn effective_api_key(&self) -> Option<String> {
+        if let Some(key) = &self.options.prosperous_key {
+            let trimmed = key.trim();
+            return if trimmed.is_empty() { None } else { Some(trimmed.to_owned()) };
+        }
+        std::env::var("PROSPEROUS_KEY")
+            .ok()
+            .map(|k| k.trim().to_owned())
+            .filter(|k| !k.is_empty())
+    }
+
+    async fn do_exchange(&self, api_key: &str) -> Option<String> {
+        let base_url = self.options.base_url.as_deref()?.trim_end_matches('/');
+        let url = format!("{base_url}/auth/exchange");
+        let uri: hyper::Uri = url.parse().ok()?;
+
+        let body = serde_json::json!({"api_key": api_key}).to_string();
+        let req = Request::builder()
+            .method("POST")
+            .uri(&uri)
+            .header("Content-Type", "application/json")
+            .body(Full::new(Bytes::from(body)))
+            .ok()?;
+
+        let res = Client::builder(TokioExecutor::new())
+            .build_http()
+            .request(req)
+            .await
+            .ok()?;
+
+        if !res.status().is_success() {
+            return None;
+        }
+
+        let bytes = res.into_body().collect().await.ok()?.to_bytes();
+        let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
+        Some(json["token"].as_str()?.to_owned())
+    }
 }
 
 fn find_token_file() -> Option<String> {

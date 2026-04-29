@@ -1,6 +1,11 @@
 use std::future::IntoFuture;
 
+use bytes::Bytes;
 use client::{exchange_api_key, parse_jwt_claims};
+use http_body_util::{BodyExt, Full};
+use hyper::Request;
+use hyper_util::client::legacy::Client;
+use hyper_util::rt::TokioExecutor;
 use tokio::net::TcpListener;
 
 async fn start_mock_server() -> String {
@@ -10,36 +15,52 @@ async fn start_mock_server() -> String {
     format!("http://{}", addr)
 }
 
+async fn post_json(url: &str, body: serde_json::Value) -> (u16, serde_json::Value) {
+    let uri: hyper::Uri = url.parse().unwrap();
+    let req = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("Content-Type", "application/json")
+        .body(Full::new(Bytes::from(body.to_string())))
+        .unwrap();
+
+    let res = Client::builder(TokioExecutor::new())
+        .build_http()
+        .request(req)
+        .await
+        .unwrap();
+
+    let status = res.status().as_u16();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let json = serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null);
+    (status, json)
+}
+
 // --- /auth/exchange ---
 
 #[tokio::test]
 async fn api_key_exchange_returns_200_with_token() {
     let base = start_mock_server().await;
-    let client = reqwest::Client::new();
-    let res = client
-        .post(format!("{base}/auth/exchange"))
-        .json(&serde_json::json!({"api_key": "my-test-key"}))
-        .send()
-        .await
-        .unwrap();
+    let (status, body) = post_json(
+        &format!("{base}/auth/exchange"),
+        serde_json::json!({"api_key": "my-test-key"}),
+    )
+    .await;
 
-    assert_eq!(res.status(), 200);
-    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(status, 200);
     assert!(body["token"].as_str().is_some(), "response should contain a token");
 }
 
 #[tokio::test]
 async fn api_key_exchange_rejects_empty_key() {
     let base = start_mock_server().await;
-    let client = reqwest::Client::new();
-    let res = client
-        .post(format!("{base}/auth/exchange"))
-        .json(&serde_json::json!({"api_key": ""}))
-        .send()
-        .await
-        .unwrap();
+    let (status, _) = post_json(
+        &format!("{base}/auth/exchange"),
+        serde_json::json!({"api_key": ""}),
+    )
+    .await;
 
-    assert_eq!(res.status(), 400);
+    assert_eq!(status, 400);
 }
 
 // --- /oauth/token ---
@@ -47,31 +68,26 @@ async fn api_key_exchange_rejects_empty_key() {
 #[tokio::test]
 async fn oauth_token_returns_200_with_token() {
     let base = start_mock_server().await;
-    let client = reqwest::Client::new();
-    let res = client
-        .post(format!("{base}/oauth/token"))
-        .json(&serde_json::json!({"code": "test-oauth-code"}))
-        .send()
-        .await
-        .unwrap();
+    let (status, body) = post_json(
+        &format!("{base}/oauth/token"),
+        serde_json::json!({"code": "test-oauth-code"}),
+    )
+    .await;
 
-    assert_eq!(res.status(), 200);
-    let body: serde_json::Value = res.json().await.unwrap();
+    assert_eq!(status, 200);
     assert!(body["token"].as_str().is_some(), "response should contain a token");
 }
 
 #[tokio::test]
 async fn oauth_token_rejects_empty_code() {
     let base = start_mock_server().await;
-    let client = reqwest::Client::new();
-    let res = client
-        .post(format!("{base}/oauth/token"))
-        .json(&serde_json::json!({"code": ""}))
-        .send()
-        .await
-        .unwrap();
+    let (status, _) = post_json(
+        &format!("{base}/oauth/token"),
+        serde_json::json!({"code": ""}),
+    )
+    .await;
 
-    assert_eq!(res.status(), 400);
+    assert_eq!(status, 400);
 }
 
 // --- Client library round-trip ---

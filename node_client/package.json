@@ -6,8 +6,8 @@
   "scripts": {
     "build:rust": "cargo build --release -p prosperous-client-native",
     "build:node": "node-gyp configure && node-gyp build",
-    "build": "npm run build:rust && npm run build:node",
-    "install": "npm run build"
+    "build": "pnpm run build:rust && pnpm run build:node",
+    "install": "pnpm run build"
   },
   "gypfile": true,
   "dependencies": {

@@ -1,0 +1,4 @@
+logged_in_as: "Logged in as %{email} (org: %{org_id})"
+error_not_logged_in: "Error: not logged in. Provide --prosperous-key or set PROSPEROUS_KEY."
+error_token_expired: "Error: token expired for %{email}. Provide --prosperous-key to reauthenticate."
+error_exchange_failed: "Error: API key exchange failed. Check your key and --base-url."

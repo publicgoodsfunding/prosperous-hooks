@@ -1,5 +1,13 @@
 use clap::Parser;
 use client::{AuthState, ClientError, ClientOptions, ProsperousClient};
+use rust_i18n::t;
+
+// Embeds `client/locales/*.yml` into this binary so `t!` below can look
+// strings up by key. Must be invoked here too (not just in the library) --
+// `t!` expands to a call rooted at `crate::`, so each crate that uses it
+// needs its own `i18n!` invocation, even though the locale files and the
+// active-locale state are shared with the `client` library.
+rust_i18n::i18n!("locales", fallback = "en");
 
 #[derive(Parser)]
 #[command(about = "Prosperous client")]
@@ -13,6 +21,10 @@ struct Args {
 
 #[tokio::main]
 async fn main() {
+    // Pick a display language from the OS locale before printing anything,
+    // so every message below -- success or error -- comes out localized.
+    client::init_locale();
+
     let args = Args::parse();
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: args.prosperous_key,
@@ -22,22 +34,22 @@ async fn main() {
     match client.initialize().await {
         Ok(()) => {
             if let AuthState::LoggedInCurrent(claims) = client.state() {
-                println!("Logged in as {} (org: {})", claims.email, claims.org_id);
+                println!(
+                    "{}",
+                    t!("logged_in_as", email = claims.email, org_id = claims.org_id)
+                );
             }
         }
         Err(ClientError::NotLoggedIn) => {
-            eprintln!("Error: not logged in. Provide --prosperous-key or set PROSPEROUS_KEY.");
+            eprintln!("{}", t!("error_not_logged_in"));
             std::process::exit(1);
         }
         Err(ClientError::TokenExpired(claims)) => {
-            eprintln!(
-                "Error: token expired for {}. Provide --prosperous-key to reauthenticate.",
-                claims.email
-            );
+            eprintln!("{}", t!("error_token_expired", email = claims.email));
             std::process::exit(1);
         }
         Err(ClientError::ExchangeFailed) => {
-            eprintln!("Error: API key exchange failed. Check your key and --base-url.");
+            eprintln!("{}", t!("error_exchange_failed"));
             std::process::exit(1);
         }
     }

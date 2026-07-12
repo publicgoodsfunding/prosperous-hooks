@@ -1,0 +1,4 @@
+logged_in_as: "Sesión iniciada como %{email} (organización: %{org_id})"
+error_not_logged_in: "Error: no se ha iniciado sesión. Proporcione --prosperous-key o defina PROSPEROUS_KEY."
+error_token_expired: "Error: el token de %{email} ha expirado. Proporcione --prosperous-key para volver a autenticarse."
+error_exchange_failed: "Error: falló el intercambio de la clave API. Verifique su clave y --base-url."

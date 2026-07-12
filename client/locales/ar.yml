@@ -1,0 +1,4 @@
+logged_in_as: "تم تسجيل الدخول باسم %{email} (المؤسسة: %{org_id})"
+error_not_logged_in: "خطأ: لم يتم تسجيل الدخول. يرجى تقديم --prosperous-key أو تعيين PROSPEROUS_KEY."
+error_token_expired: "خطأ: انتهت صلاحية الرمز الخاص بـ %{email}. يرجى تقديم --prosperous-key لإعادة المصادقة."
+error_exchange_failed: "خطأ: فشل تبادل مفتاح API. يرجى التحقق من المفتاح و --base-url."

@@ -1,0 +1,4 @@
+logged_in_as: "已登录为 %{email}（组织：%{org_id}）"
+error_not_logged_in: "错误：未登录。请提供 --prosperous-key 或设置 PROSPEROUS_KEY。"
+error_token_expired: "错误：%{email} 的令牌已过期。请提供 --prosperous-key 以重新认证。"
+error_exchange_failed: "错误：API 密钥交换失败。请检查您的密钥和 --base-url。"

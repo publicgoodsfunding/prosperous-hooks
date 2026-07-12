@@ -1,0 +1,4 @@
+logged_in_as: "%{email} के रूप में लॉग इन किया गया (संगठन: %{org_id})"
+error_not_logged_in: "त्रुटि: लॉग इन नहीं है। कृपया --prosperous-key दें या PROSPEROUS_KEY सेट करें।"
+error_token_expired: "त्रुटि: %{email} का टोकन समाप्त हो गया है। पुनः प्रमाणीकरण हेतु --prosperous-key दें।"
+error_exchange_failed: "त्रुटि: API कुंजी विनिमय विफल रहा। अपनी कुंजी और --base-url जाँचें।"

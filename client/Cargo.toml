@@ -13,3 +13,5 @@ serde_json = "1"
 base64 = "0.22"
 dirs = "5"
 clap = { version = "4", features = ["derive", "env"] }
+sys-locale = "0.3.2"
+rust-i18n = "4.1.0"

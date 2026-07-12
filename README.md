@@ -57,6 +57,13 @@ cargo run -p client -- --help
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
 
+Output is localized based on the OS locale (checked via `LANG`/`LC_ALL` on Linux/macOS). Supported languages: English (`en`), Mandarin (`zh`), Spanish (`es`), Arabic (`ar`), Hindi (`hi`); anything else falls back to English:
+
+```bash
+LANG=es_ES.UTF-8 cargo run -p client
+# Error: no se ha iniciado sesión. Proporcione --prosperous-key o defina PROSPEROUS_KEY.
+```
+
 ---
 
 ## Using the Node.js client

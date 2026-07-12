@@ -1,29 +1,44 @@
-use http_body_util::BodyExt;
-use hyper::Request;
-use hyper_util::client::legacy::Client;
-use hyper_util::rt::TokioExecutor;
+use clap::Parser;
+use client::{AuthState, ClientError, ClientOptions, ProsperousClient};
+
+#[derive(Parser)]
+#[command(about = "Prosperous client")]
+struct Args {
+    #[arg(long, env = "PROSPEROUS_KEY")]
+    prosperous_key: Option<String>,
+
+    #[arg(long, env = "PROSPEROUS_BASE_URL")]
+    base_url: Option<String>,
+}
 
 #[tokio::main]
 async fn main() {
-    let url = std::env::args()
-        .nth(1)
-        .unwrap_or_else(|| "http://127.0.0.1:3000/".to_string());
+    let args = Args::parse();
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: args.prosperous_key,
+        base_url: args.base_url,
+    });
 
-    let uri: hyper::Uri = url.parse().expect("invalid URL");
-
-    let client = Client::builder(TokioExecutor::new()).build_http();
-
-    let req = Request::builder()
-        .uri(&uri)
-        .body(http_body_util::Empty::<bytes::Bytes>::new())
-        .unwrap();
-
-    let res = client.request(req).await.expect("request failed");
-
-    println!("Status: {}", res.status());
-
-    let body = res.into_body().collect().await.expect("failed to read body");
-    let bytes = body.to_bytes();
-    let body = String::from_utf8_lossy(&bytes);
-    println!("Body: {body}");
+    match client.initialize().await {
+        Ok(()) => {
+            if let AuthState::LoggedInCurrent(claims) = client.state() {
+                println!("Logged in as {} (org: {})", claims.email, claims.org_id);
+            }
+        }
+        Err(ClientError::NotLoggedIn) => {
+            eprintln!("Error: not logged in. Provide --prosperous-key or set PROSPEROUS_KEY.");
+            std::process::exit(1);
+        }
+        Err(ClientError::TokenExpired(claims)) => {
+            eprintln!(
+                "Error: token expired for {}. Provide --prosperous-key to reauthenticate.",
+                claims.email
+            );
+            std::process::exit(1);
+        }
+        Err(ClientError::ExchangeFailed) => {
+            eprintln!("Error: API key exchange failed. Check your key and --base-url.");
+            std::process::exit(1);
+        }
+    }
 }

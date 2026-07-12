@@ -25,6 +25,12 @@ pub extern "C" fn prosperous_initialize(
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key,
         base_url,
+        // This is an embedded native addon, not a terminal app: never block
+        // the host process on stdin for an interactive login.
+        interactive: false,
+        // The remaining options (revenue threshold / revshare percentage)
+        // only affect the interactive login message, which never runs here.
+        ..Default::default()
     });
 
     let result = runtime().block_on(client.initialize());
@@ -50,9 +56,21 @@ pub extern "C" fn prosperous_initialize(
             "email": claims.email,
             "orgId": claims.org_id,
         }),
-        Err(ClientError::ExchangeFailed) => serde_json::json!({
+        Err(ClientError::PaymentRequired) => serde_json::json!({
             "ok": false,
-            "error": "ExchangeFailed",
+            "error": "PaymentRequired",
+        }),
+        Err(ClientError::InvalidApiKey) => serde_json::json!({
+            "ok": false,
+            "error": "InvalidApiKey",
+        }),
+        Err(ClientError::ServerUnreachable) => serde_json::json!({
+            "ok": false,
+            "error": "ServerUnreachable",
+        }),
+        Err(ClientError::UnknownServerError) => serde_json::json!({
+            "ok": false,
+            "error": "UnknownServerError",
         }),
     };
 

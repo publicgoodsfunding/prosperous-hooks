@@ -55,11 +55,38 @@ struct TokenResponse {
 async fn exchange_handler(
     Json(body): Json<ExchangeRequest>,
 ) -> impl IntoResponse {
-    if body.api_key.trim().is_empty() {
-        return (StatusCode::BAD_REQUEST, Json(serde_json::json!({"error": "api_key is required"}))).into_response();
+    // Sentinel API keys let tests (and manual runs) drive the client's
+    // exchange-failure paths deterministically. Any other non-empty key is
+    // treated as valid and exchanged for a token.
+    match body.api_key.trim() {
+        "" => (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({"error": "api_key is required"})),
+        )
+            .into_response(),
+        // Key is valid, but the account owes dues.
+        "unpaid-dues" => (
+            StatusCode::PAYMENT_REQUIRED,
+            Json(serde_json::json!({"error": "payment required"})),
+        )
+            .into_response(),
+        // Key is not recognized (deleted, expired, or wrong).
+        "invalid-key" => (
+            StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "invalid api key"})),
+        )
+            .into_response(),
+        // Server-side failure with no more specific meaning.
+        "server-error" => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(serde_json::json!({"error": "internal error"})),
+        )
+            .into_response(),
+        _ => {
+            let token = sign_token("user@example.com", "test-org", 3600);
+            (StatusCode::OK, Json(TokenResponse { token })).into_response()
+        }
     }
-    let token = sign_token("user@example.com", "test-org", 3600);
-    (StatusCode::OK, Json(TokenResponse { token })).into_response()
 }
 
 async fn oauth_token_handler(

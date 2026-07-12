@@ -36,6 +36,8 @@ cargo run -p mock_server
 # Listening on 0.0.0.0:3000
 ```
 
+`/auth/exchange` recognizes a few **sentinel API keys** to exercise the client's failure paths: `unpaid-dues` → `402 Payment Required`, `invalid-key` → `401 Unauthorized`, `server-error` → `500`. Any other non-empty key is exchanged for a valid token.
+
 ---
 
 ## Running the Rust client
@@ -55,7 +57,20 @@ cargo run -p client -- --prosperous-key my-api-key --base-url http://localhost:3
 cargo run -p client -- --help
 ```
 
+If you have neither a cached token nor an API key, the client walks you through logging in: it prints instructions to sign in on the server and generate an API key, then waits for you to paste it. An invalid key re-prompts (up to 3 times); dues owed, an unreachable server, or an unknown server error are reported without retrying. This interactive prompt only appears when stdin is a terminal — piped/CI runs and the Node addon report `NotLoggedIn` instead of blocking.
+
+To disable the interactive prompt entirely (even on a terminal), pass `--interactive false` or set `PROSPEROUS_INTERACTIVE=false`; the client then reports `NotLoggedIn` rather than prompting. It defaults to `true`.
+
+The login message explains the Prosperous Software movement's contribution terms. The two figures it quotes are configurable: `--revenue-threshold <USD>` (`PROSPEROUS_REVENUE_THRESHOLD`, default `1000000`) is the annual revenue above which a company is asked to contribute, and `--revshare-percentage <PCT>` (`PROSPEROUS_REVSHARE_PERCENTAGE`, default `1`) is the share requested. Everyone under the threshold uses the software for free, and registering once covers all software in the movement.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
+
+Output is localized based on the OS locale (checked via `LANG`/`LC_ALL` on Linux/macOS). Supported languages: English (`en`), Mandarin (`zh`), Spanish (`es`), Arabic (`ar`), Hindi (`hi`); anything else falls back to English:
+
+```bash
+LANG=es_ES.UTF-8 cargo run -p client
+# Error: no se ha iniciado sesión. Proporcione --prosperous-key o defina PROSPEROUS_KEY.
+```
 
 ---
 
@@ -91,7 +106,8 @@ try {
   // state: { type: 'LoggedInCurrent', email, orgId, exp }
   console.log(`Logged in as ${state.email} (org: ${state.orgId})`);
 } catch (err) {
-  // err.code: 'NotLoggedIn' | 'TokenExpired' | 'ExchangeFailed'
+  // err.code: 'NotLoggedIn' | 'TokenExpired' | 'PaymentRequired'
+  //         | 'InvalidApiKey' | 'ServerUnreachable' | 'UnknownServerError'
   console.error(`Auth failed [${err.code}]: ${err.message}`);
 }
 

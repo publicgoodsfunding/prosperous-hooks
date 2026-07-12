@@ -6,6 +6,6 @@ error_invalid_api_key: "Error: that API key was not accepted. Generate a new one
 error_server_unreachable: "Error: could not reach the Prosperous server. Check your connection and --base-url."
 error_unknown_server: "Error: the server returned an unexpected response. Please try again later."
 login_server_generic: "the Prosperous server"
-login_intro: "You are not logged in. Open %{url} in your browser, sign in, and generate a new API key."
+login_intro: "Welcome! This software is part of the Prosperous Software movement — an effort to bring sustainable funding to open source.\n\nTo use it, you first need to register an account at %{url}. You only need to do this once: the same account works across every piece of software in the movement.\n\nCompanies earning more than $%{revenue} in annual revenue are asked to contribute %{revshare}% of it back to open source. For everyone else, it's completely free.\n\nOnce you've registered, generate an API key and paste it below."
 login_prompt: "Paste your API key: "
 login_invalid_retry: "That API key was not accepted. Please try again."

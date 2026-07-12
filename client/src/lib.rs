@@ -10,5 +10,6 @@ rust_i18n::i18n!("locales", fallback = "en");
 
 pub use client::{
     parse_jwt_claims, AuthState, ClientError, ClientOptions, ProsperousClient, TokenClaims,
+    DEFAULT_REVENUE_THRESHOLD, DEFAULT_REVSHARE_PERCENTAGE,
 };
 pub use locale::{detect_system_locale, init_locale, SUPPORTED_LOCALES};

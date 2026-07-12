@@ -6,6 +6,6 @@ error_invalid_api_key: "错误：该 API 密钥未被接受。请生成一个新
 error_server_unreachable: "错误：无法连接到 Prosperous 服务器。请检查您的网络连接和 --base-url。"
 error_unknown_server: "错误：服务器返回了意外的响应。请稍后重试。"
 login_server_generic: "Prosperous 服务器"
-login_intro: "您尚未登录。请在浏览器中打开 %{url}，登录并生成一个新的 API 密钥。"
+login_intro: "欢迎！本软件是 Prosperous 软件运动的一部分——一项为开源软件带来可持续资金支持的运动。\n\n要使用它，您首先需要在 %{url} 注册一个账户。您只需注册一次：同一个账户可用于本运动中的所有软件。\n\n年收入超过 %{revenue} 美元的公司，将被邀请把其中的 %{revshare}% 回馈给开源社区。对于其他所有人，则完全免费。\n\n注册完成后，请生成一个 API 密钥并粘贴到下方。"
 login_prompt: "请粘贴您的 API 密钥："
 login_invalid_retry: "该 API 密钥未被接受。请重试。"

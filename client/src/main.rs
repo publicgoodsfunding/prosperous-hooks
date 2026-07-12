@@ -29,6 +29,25 @@ struct Args {
         action = clap::ArgAction::Set
     )]
     interactive: bool,
+
+    /// Annual revenue (in whole USD) above which a company is asked to
+    /// contribute a share to open source; smaller users are free. Shown in
+    /// the interactive login message.
+    #[arg(
+        long,
+        env = "PROSPEROUS_REVENUE_THRESHOLD",
+        default_value_t = client::DEFAULT_REVENUE_THRESHOLD
+    )]
+    revenue_threshold: u64,
+
+    /// Percentage of revenue that companies over the threshold are asked to
+    /// contribute. Shown in the interactive login message.
+    #[arg(
+        long,
+        env = "PROSPEROUS_REVSHARE_PERCENTAGE",
+        default_value_t = client::DEFAULT_REVSHARE_PERCENTAGE
+    )]
+    revshare_percentage: f64,
 }
 
 #[tokio::main]
@@ -42,6 +61,8 @@ async fn main() {
         prosperous_key: args.prosperous_key,
         base_url: args.base_url,
         interactive: args.interactive,
+        revenue_threshold: args.revenue_threshold,
+        revshare_percentage: args.revshare_percentage,
     });
 
     match client.initialize().await {

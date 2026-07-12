@@ -61,6 +61,8 @@ If you have neither a cached token nor an API key, the client walks you through 
 
 To disable the interactive prompt entirely (even on a terminal), pass `--interactive false` or set `PROSPEROUS_INTERACTIVE=false`; the client then reports `NotLoggedIn` rather than prompting. It defaults to `true`.
 
+The login message explains the Prosperous Software movement's contribution terms. The two figures it quotes are configurable: `--revenue-threshold <USD>` (`PROSPEROUS_REVENUE_THRESHOLD`, default `1000000`) is the annual revenue above which a company is asked to contribute, and `--revshare-percentage <PCT>` (`PROSPEROUS_REVSHARE_PERCENTAGE`, default `1`) is the share requested. Everyone under the threshold uses the software for free, and registering once covers all software in the movement.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
 
 Output is localized based on the OS locale (checked via `LANG`/`LC_ALL` on Linux/macOS). Supported languages: English (`en`), Mandarin (`zh`), Spanish (`es`), Arabic (`ar`), Hindi (`hi`); anything else falls back to English:

@@ -144,6 +144,7 @@ async fn initialize_with_empty_key_returns_not_logged_in() {
         // Force non-interactive so the assertion holds regardless of whether
         // the test runner's stdin happens to be a terminal.
         interactive: false,
+        ..Default::default()
     });
 
     assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));
@@ -157,6 +158,7 @@ async fn non_interactive_option_skips_login_and_reports_not_logged_in() {
         prosperous_key: None,
         base_url: None,
         interactive: false,
+        ..Default::default()
     });
 
     assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));

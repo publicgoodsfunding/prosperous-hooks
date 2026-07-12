@@ -28,6 +28,9 @@ pub extern "C" fn prosperous_initialize(
         // This is an embedded native addon, not a terminal app: never block
         // the host process on stdin for an interactive login.
         interactive: false,
+        // The remaining options (revenue threshold / revshare percentage)
+        // only affect the interactive login message, which never runs here.
+        ..Default::default()
     });
 
     let result = runtime().block_on(client.initialize());

@@ -130,7 +130,20 @@ pub struct ClientOptions {
     /// (Interactive login additionally requires stdin to be a terminal, so
     /// leaving this `true` is still safe for piped/CI contexts.)
     pub interactive: bool,
+    /// Annual revenue (in whole dollars) above which a company is asked to
+    /// contribute a share of it to open source; smaller users are free. Shown
+    /// to the user during interactive login. Defaults to `DEFAULT_REVENUE_THRESHOLD`.
+    pub revenue_threshold: u64,
+    /// The percentage of revenue that companies over `revenue_threshold` are
+    /// asked to contribute. Shown to the user during interactive login.
+    /// Defaults to `DEFAULT_REVSHARE_PERCENTAGE`.
+    pub revshare_percentage: f64,
 }
+
+/// Default revenue threshold (USD) above which contribution is requested.
+pub const DEFAULT_REVENUE_THRESHOLD: u64 = 1_000_000;
+/// Default share of revenue requested from companies over the threshold.
+pub const DEFAULT_REVSHARE_PERCENTAGE: f64 = 1.0;
 
 impl Default for ClientOptions {
     fn default() -> Self {
@@ -138,6 +151,8 @@ impl Default for ClientOptions {
             prosperous_key: None,
             base_url: None,
             interactive: true,
+            revenue_threshold: DEFAULT_REVENUE_THRESHOLD,
+            revshare_percentage: DEFAULT_REVSHARE_PERCENTAGE,
         }
     }
 }
@@ -252,14 +267,23 @@ impl ProsperousClient {
     /// the other failure reasons (dues owed, server unreachable, unknown
     /// error) can't be fixed by retyping, so they abort immediately.
     async fn interactive_login(&mut self) -> Result<(), ClientError> {
-        // Show the "how to log in" instructions once, naming the server when
-        // we know it so the user knows where to go.
+        // Show the welcome/how-to-log-in message once, naming the server when
+        // we know it and spelling out the contribution terms so the user
+        // understands what registering entails.
         let server = self
             .options
             .base_url
             .clone()
             .unwrap_or_else(|| t!("login_server_generic").into_owned());
-        eprintln!("{}", t!("login_intro", url = server));
+        eprintln!(
+            "{}",
+            t!(
+                "login_intro",
+                url = server,
+                revenue = group_thousands(self.options.revenue_threshold),
+                revshare = self.options.revshare_percentage
+            )
+        );
 
         for attempt in 1..=MAX_LOGIN_ATTEMPTS {
             eprint!("{}", t!("login_prompt"));
@@ -422,6 +446,22 @@ fn classify_failure(outcome: ExchangeOutcome) -> (AuthState, ClientError) {
     }
 }
 
+/// Formats a whole number with commas grouping every three digits, e.g.
+/// `1000000` -> `"1,000,000"`, for a more readable revenue figure in the
+/// login message. Digit-only and ASCII, so the byte-wise walk is safe.
+fn group_thousands(n: u64) -> String {
+    let digits = n.to_string();
+    let len = digits.len();
+    let mut out = String::with_capacity(len + (len.saturating_sub(1)) / 3);
+    for (i, ch) in digits.chars().enumerate() {
+        if i > 0 && (len - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(ch);
+    }
+    out
+}
+
 /// Whether stdin is an interactive terminal. The interactive login only makes
 /// sense when a human can actually type a key; in non-interactive contexts
 /// (pipes, CI, or the `node_client` addon embedded in another process) we
@@ -516,6 +556,15 @@ fn is_expired(exp: i64) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn group_thousands_inserts_separators() {
+        assert_eq!(group_thousands(0), "0");
+        assert_eq!(group_thousands(42), "42");
+        assert_eq!(group_thousands(1000), "1,000");
+        assert_eq!(group_thousands(1_000_000), "1,000,000");
+        assert_eq!(group_thousands(12_345_678), "12,345,678");
+    }
 
     #[test]
     fn classify_failure_maps_each_outcome_to_its_state_and_error() {

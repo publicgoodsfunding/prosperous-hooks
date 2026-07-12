@@ -6,6 +6,6 @@ error_invalid_api_key: "Error: esa clave API no fue aceptada. Genere una nueva e
 error_server_unreachable: "Error: no se pudo contactar con el servidor de Prosperous. Verifique su conexión y --base-url."
 error_unknown_server: "Error: el servidor devolvió una respuesta inesperada. Inténtelo de nuevo más tarde."
 login_server_generic: "el servidor de Prosperous"
-login_intro: "No ha iniciado sesión. Abra %{url} en su navegador, inicie sesión y genere una nueva clave API."
+login_intro: "¡Bienvenido! Este software forma parte del movimiento Prosperous Software, una iniciativa para dar financiación sostenible al código abierto.\n\nPara usarlo, primero debe registrar una cuenta en %{url}. Solo tiene que hacerlo una vez: la misma cuenta funciona con todo el software del movimiento.\n\nSe pide a las empresas con ingresos anuales superiores a %{revenue} USD que aporten el %{revshare}% de ellos al código abierto. Para todos los demás, es totalmente gratis.\n\nUna vez registrado, genere una clave API y péguela a continuación."
 login_prompt: "Pegue su clave API: "
 login_invalid_retry: "Esa clave API no fue aceptada. Inténtelo de nuevo."

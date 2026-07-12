@@ -63,8 +63,9 @@ exchange: state = HasApiKey(key), then POST /auth/exchange, classified by respon
 │  ├─ no response (transport error/bad URL) ───► ServerUnreachable            [Err: ServerUnreachable]
 │  └─ any other response ──────────────────────► UnknownServerError           [Err: UnknownServerError]
 │
-interactive login (only when stdin is a terminal): prompt the user to log in
-and paste a freshly generated API key, then run the same exchange classification:
+interactive login (only when the `interactive` option is set AND stdin is a
+terminal): prompt the user to log in and paste a freshly generated API key,
+then run the same exchange classification:
    ├─ success ────────────────────────────────► LoggedInCurrent(claims)      [Ok]
    ├─ InvalidApiKey ──► re-prompt, up to 3 attempts, then ─► [Err: InvalidApiKey]
    └─ PaymentRequired / ServerUnreachable / UnknownServerError ─► report immediately (no retry)
@@ -84,7 +85,7 @@ The exchange (used by both rules 2/4 and the interactive login) classifies the s
 
 When no valid token and no API key are available, and stdin is an interactive terminal, `initialize()` walks the user through logging in: it prints instructions to open the server, sign in, and generate an API key, then reads a pasted key from stdin and exchanges it. A pasted key that comes back `InvalidApiKey` is re-prompted (up to 3 attempts total); the other failure reasons abort immediately, since retyping the key cannot fix dues owed, an unreachable server, or an unknown server error.
 
-The prompt is guarded by `stdin().is_terminal()`. In non-interactive contexts — piped input, CI, or the `node_client` addon embedded in another process — the login is skipped so `initialize()` never blocks on stdin, and the client reports the plain `NotLoggedIn` / `TokenExpired` outcome instead.
+The prompt is guarded by two conditions: the `ClientOptions.interactive` flag (default `true`; exposed on the CLI as `--interactive <bool>` / `PROSPEROUS_INTERACTIVE`) must be set, **and** `stdin().is_terminal()` must be true. Setting `interactive` to `false` forces strictly non-interactive behavior even on a terminal; the terminal check independently covers piped input, CI, and the `node_client` addon (which sets `interactive: false` outright). When either condition fails the login is skipped, `initialize()` never blocks on stdin, and the client reports the plain `NotLoggedIn` / `TokenExpired` outcome instead.
 
 The API key is resolved by `effective_api_key()`: `ClientOptions.prosperous_key` takes precedence when explicitly set (including an explicit empty string, which is treated as "no key" and does **not** fall back to the environment); otherwise the `PROSPEROUS_KEY` environment variable is consulted. Note that a key supplied this way (env var / flag / cached-token refresh) gets a single exchange attempt with no interactive re-prompt — the paste loop only applies when no key was available up front.
 
@@ -92,7 +93,7 @@ The API key is resolved by `effective_api_key()`: `ClientOptions.prosperous_key`
 
 1. Looks for a cached JWT in `.prosperous/token`, walking up from the current directory to `$HOME`.
 2. If no token file is found, exchanges `PROSPEROUS_KEY` / `--prosperous-key` for a JWT via `POST /auth/exchange` against `PROSPEROUS_BASE_URL` / `--base-url`.
-3. If neither a token nor an API key is available and stdin is a terminal, prompts the user to log in and paste a freshly generated API key, then exchanges it.
+3. If neither a token nor an API key is available, the `interactive` option is enabled (the default), and stdin is a terminal, prompts the user to log in and paste a freshly generated API key, then exchanges it.
 4. Prints a localized error and exits 1 if authentication cannot be completed (not logged in, token expired, payment required, invalid key, server unreachable, or unknown server error).
 
 ---

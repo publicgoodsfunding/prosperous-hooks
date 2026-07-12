@@ -122,6 +122,24 @@ pub struct ClientOptions {
     /// Base URL of the Prosperous server used for API key exchange (e.g.
     /// `http://localhost:3000`). Required only when an exchange is needed.
     pub base_url: Option<String>,
+    /// Whether `initialize` may fall back to an interactive login (prompting
+    /// the user to paste an API key) when no other credentials are available.
+    /// Defaults to `true` (see the `Default` impl). Set it to `false` to keep
+    /// initialization strictly non-interactive — the client then reports
+    /// `NotLoggedIn`/`TokenExpired` instead of prompting, even on a terminal.
+    /// (Interactive login additionally requires stdin to be a terminal, so
+    /// leaving this `true` is still safe for piped/CI contexts.)
+    pub interactive: bool,
+}
+
+impl Default for ClientOptions {
+    fn default() -> Self {
+        ClientOptions {
+            prosperous_key: None,
+            base_url: None,
+            interactive: true,
+        }
+    }
 }
 
 /// Entry point for consumers of this crate. Wraps the current `AuthState`
@@ -207,21 +225,24 @@ impl ProsperousClient {
         }
     }
 
-    /// Runs the interactive login when stdin is a terminal, otherwise records
-    /// `non_tty_state`/`non_tty_err` and returns without prompting. This is
-    /// what keeps the library usable from `node_client` and piped/CI
-    /// contexts: initialization stays non-blocking there and simply reports
-    /// that no credentials were found.
+    /// Runs the interactive login only when it's both enabled
+    /// (`ClientOptions.interactive`) and possible (stdin is a terminal);
+    /// otherwise records `fallback_state`/`fallback_err` and returns without
+    /// prompting. The `interactive` opt-out lets a caller force strictly
+    /// non-interactive behavior, while the terminal check keeps the library
+    /// usable from `node_client` and piped/CI contexts — in both cases
+    /// initialization stays non-blocking and simply reports that no
+    /// credentials were found.
     async fn login_or_fail(
         &mut self,
-        non_tty_state: AuthState,
-        non_tty_err: ClientError,
+        fallback_state: AuthState,
+        fallback_err: ClientError,
     ) -> Result<(), ClientError> {
-        if stdin_is_interactive() {
+        if self.options.interactive && stdin_is_interactive() {
             self.interactive_login().await
         } else {
-            self.state = non_tty_state;
-            Err(non_tty_err)
+            self.state = fallback_state;
+            Err(fallback_err)
         }
     }
 

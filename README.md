@@ -59,6 +59,8 @@ cargo run -p client -- --help
 
 If you have neither a cached token nor an API key, the client walks you through logging in: it prints instructions to sign in on the server and generate an API key, then waits for you to paste it. An invalid key re-prompts (up to 3 times); dues owed, an unreachable server, or an unknown server error are reported without retrying. This interactive prompt only appears when stdin is a terminal — piped/CI runs and the Node addon report `NotLoggedIn` instead of blocking.
 
+To disable the interactive prompt entirely (even on a terminal), pass `--interactive false` or set `PROSPEROUS_INTERACTIVE=false`; the client then reports `NotLoggedIn` rather than prompting. It defaults to `true`.
+
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
 
 Output is localized based on the OS locale (checked via `LANG`/`LC_ALL` on Linux/macOS). Supported languages: English (`en`), Mandarin (`zh`), Spanish (`es`), Arabic (`ar`), Hindi (`hi`); anything else falls back to English:

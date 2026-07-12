@@ -17,6 +17,18 @@ struct Args {
 
     #[arg(long, env = "PROSPEROUS_BASE_URL")]
     base_url: Option<String>,
+
+    /// Whether to allow the interactive login fallback (prompting for a
+    /// pasted API key) when no other credentials are available. Defaults to
+    /// true; pass `--interactive false` (or `PROSPEROUS_INTERACTIVE=false`)
+    /// to keep the run strictly non-interactive.
+    #[arg(
+        long,
+        env = "PROSPEROUS_INTERACTIVE",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    interactive: bool,
 }
 
 #[tokio::main]
@@ -29,6 +41,7 @@ async fn main() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: args.prosperous_key,
         base_url: args.base_url,
+        interactive: args.interactive,
     });
 
     match client.initialize().await {

@@ -98,6 +98,7 @@ async fn client_initialize_with_api_key_returns_ok() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("my-test-key".to_owned()),
         base_url: Some(base),
+        ..Default::default()
     });
 
     assert!(client.initialize().await.is_ok());
@@ -116,6 +117,7 @@ async fn initialized_token_is_not_expired() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("my-test-key".to_owned()),
         base_url: Some(base),
+        ..Default::default()
     });
 
     client.initialize().await.unwrap();
@@ -139,6 +141,22 @@ async fn initialize_with_empty_key_returns_not_logged_in() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("".to_owned()),
         base_url: Some(base),
+        // Force non-interactive so the assertion holds regardless of whether
+        // the test runner's stdin happens to be a terminal.
+        interactive: false,
+    });
+
+    assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));
+}
+
+#[tokio::test]
+async fn non_interactive_option_skips_login_and_reports_not_logged_in() {
+    // With interactive disabled and no credentials available, initialize must
+    // report NotLoggedIn without attempting (or blocking on) a login prompt.
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: None,
+        base_url: None,
+        interactive: false,
     });
 
     assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));
@@ -152,6 +170,7 @@ async fn unpaid_dues_maps_to_payment_required() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("unpaid-dues".to_owned()),
         base_url: Some(base),
+        ..Default::default()
     });
 
     assert!(matches!(
@@ -167,6 +186,7 @@ async fn rejected_key_maps_to_invalid_api_key() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("invalid-key".to_owned()),
         base_url: Some(base),
+        ..Default::default()
     });
 
     assert!(matches!(
@@ -182,6 +202,7 @@ async fn server_5xx_maps_to_unknown_server_error() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("server-error".to_owned()),
         base_url: Some(base),
+        ..Default::default()
     });
 
     assert!(matches!(
@@ -198,6 +219,7 @@ async fn no_reachable_server_maps_to_server_unreachable() {
     let mut client = ProsperousClient::new(ClientOptions {
         prosperous_key: Some("any-key".to_owned()),
         base_url: Some("http://127.0.0.1:1".to_owned()),
+        ..Default::default()
     });
 
     assert!(matches!(

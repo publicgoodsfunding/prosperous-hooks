@@ -50,9 +50,21 @@ pub extern "C" fn prosperous_initialize(
             "email": claims.email,
             "orgId": claims.org_id,
         }),
-        Err(ClientError::ExchangeFailed) => serde_json::json!({
+        Err(ClientError::PaymentRequired) => serde_json::json!({
             "ok": false,
-            "error": "ExchangeFailed",
+            "error": "PaymentRequired",
+        }),
+        Err(ClientError::InvalidApiKey) => serde_json::json!({
+            "ok": false,
+            "error": "InvalidApiKey",
+        }),
+        Err(ClientError::ServerUnreachable) => serde_json::json!({
+            "ok": false,
+            "error": "ServerUnreachable",
+        }),
+        Err(ClientError::UnknownServerError) => serde_json::json!({
+            "ok": false,
+            "error": "UnknownServerError",
         }),
     };
 

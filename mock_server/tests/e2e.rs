@@ -144,6 +144,69 @@ async fn initialize_with_empty_key_returns_not_logged_in() {
     assert!(matches!(client.initialize().await, Err(ClientError::NotLoggedIn)));
 }
 
+// --- Exchange-failure reasons ---
+
+#[tokio::test]
+async fn unpaid_dues_maps_to_payment_required() {
+    let base = start_mock_server().await;
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("unpaid-dues".to_owned()),
+        base_url: Some(base),
+    });
+
+    assert!(matches!(
+        client.initialize().await,
+        Err(ClientError::PaymentRequired)
+    ));
+    assert!(matches!(client.state(), AuthState::PaymentRequired));
+}
+
+#[tokio::test]
+async fn rejected_key_maps_to_invalid_api_key() {
+    let base = start_mock_server().await;
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("invalid-key".to_owned()),
+        base_url: Some(base),
+    });
+
+    assert!(matches!(
+        client.initialize().await,
+        Err(ClientError::InvalidApiKey)
+    ));
+    assert!(matches!(client.state(), AuthState::InvalidApiKey));
+}
+
+#[tokio::test]
+async fn server_5xx_maps_to_unknown_server_error() {
+    let base = start_mock_server().await;
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("server-error".to_owned()),
+        base_url: Some(base),
+    });
+
+    assert!(matches!(
+        client.initialize().await,
+        Err(ClientError::UnknownServerError)
+    ));
+    assert!(matches!(client.state(), AuthState::UnknownServerError));
+}
+
+#[tokio::test]
+async fn no_reachable_server_maps_to_server_unreachable() {
+    // Port 1 is not listening, so the connection is refused before any HTTP
+    // response comes back.
+    let mut client = ProsperousClient::new(ClientOptions {
+        prosperous_key: Some("any-key".to_owned()),
+        base_url: Some("http://127.0.0.1:1".to_owned()),
+    });
+
+    assert!(matches!(
+        client.initialize().await,
+        Err(ClientError::ServerUnreachable)
+    ));
+    assert!(matches!(client.state(), AuthState::ServerUnreachable));
+}
+
 #[tokio::test]
 async fn parse_jwt_claims_round_trips_server_token() {
     let base = start_mock_server().await;

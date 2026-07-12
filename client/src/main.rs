@@ -48,8 +48,20 @@ async fn main() {
             eprintln!("{}", t!("error_token_expired", email = claims.email));
             std::process::exit(1);
         }
-        Err(ClientError::ExchangeFailed) => {
-            eprintln!("{}", t!("error_exchange_failed"));
+        Err(ClientError::PaymentRequired) => {
+            eprintln!("{}", t!("error_payment_required"));
+            std::process::exit(1);
+        }
+        Err(ClientError::InvalidApiKey) => {
+            eprintln!("{}", t!("error_invalid_api_key"));
+            std::process::exit(1);
+        }
+        Err(ClientError::ServerUnreachable) => {
+            eprintln!("{}", t!("error_server_unreachable"));
+            std::process::exit(1);
+        }
+        Err(ClientError::UnknownServerError) => {
+            eprintln!("{}", t!("error_unknown_server"));
             std::process::exit(1);
         }
     }

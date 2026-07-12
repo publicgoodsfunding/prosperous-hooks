@@ -1,12 +1,19 @@
+use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full};
-use hyper::Request;
+use hyper::{Request, StatusCode};
 use hyper_util::client::legacy::Client;
 use hyper_util::rt::TokioExecutor;
+use rust_i18n::t;
+
+/// How many times the interactive login will accept a fresh API key paste
+/// before giving up. Only *invalid* keys consume an attempt-and-retry; the
+/// other failure reasons abort immediately (retyping the key won't fix them).
+const MAX_LOGIN_ATTEMPTS: usize = 3;
 
 /// The claims decoded from a Prosperous JWT: who the user is, which
 /// organization they belong to, and when the token stops being valid.
@@ -20,7 +27,7 @@ pub struct TokenClaims {
 
 /// The client's auth state machine. `ProsperousClient::initialize` walks
 /// through these states based on what credentials are available: a token
-/// cached on disk, an API key, or neither.
+/// cached on disk, an API key, an interactively pasted key, or neither.
 #[derive(Debug)]
 pub enum AuthState {
     /// No usable credentials were found: no cached token file and no API key
@@ -37,24 +44,73 @@ pub enum AuthState {
     /// state in which authentication succeeded.
     LoggedInCurrent(TokenClaims),
     /// A JWT was found on disk but its `exp` claim has passed, and it could
-    /// not be refreshed (either no API key was available to retry with, or
-    /// the exchange attempt failed).
+    /// not be refreshed (no API key was available and no interactive login
+    /// was possible).
     LoggedInExpired(TokenClaims),
+
+    // The four states below all describe a *failed API key exchange*. The
+    // key made it to the server, but the server declined to issue a JWT.
+    // They are distinguished because the CLI reacts differently to each
+    // (see `ProsperousClient::initialize` and the interactive login loop).
+    /// The API key itself was accepted, but the account has outstanding dues:
+    /// the server refuses to issue a token until payment is settled. Signalled
+    /// by an HTTP `402 Payment Required` from the exchange endpoint.
+    PaymentRequired,
+    /// The server rejected the API key as unusable — deleted, expired, or
+    /// simply wrong. Signalled by an HTTP `401`/`403`. This is the only
+    /// exchange failure the interactive login retries, since pasting a
+    /// different key can resolve it.
+    InvalidApiKey,
+    /// The server could not be reached at all: no base URL configured, an
+    /// unparseable URL, or a transport-level failure (DNS, connection
+    /// refused, TLS, timeout). We never received an HTTP response.
+    ServerUnreachable,
+    /// The server was reachable and returned a response, but not one we can
+    /// act on: an unexpected status code, or a `2xx` whose body wasn't a
+    /// parseable token. Treated as a transient server-side problem rather
+    /// than a credential problem.
+    UnknownServerError,
 }
 
 /// The error returned by `ProsperousClient::initialize` when it does not
-/// land in `AuthState::LoggedInCurrent`. Each variant carries whatever
-/// context is available so callers can report a useful message.
+/// land in `AuthState::LoggedInCurrent`. Each variant mirrors the terminal
+/// `AuthState` it accompanies so callers can report a useful message.
 #[derive(Debug)]
 pub enum ClientError {
-    /// No cached token and no API key were available at all.
+    /// No cached token and no API key were available, and no key could be
+    /// obtained interactively (non-interactive context, or the user provided
+    /// nothing).
     NotLoggedIn,
-    /// A cached token was found but has expired, and no API key was
-    /// available to refresh it.
+    /// A cached token was found but has expired, no API key was available to
+    /// refresh it, and no interactive login was possible.
     TokenExpired(TokenClaims),
-    /// An API key was available but exchanging it for a JWT failed (network
-    /// error, non-2xx response, or an unparseable token in the response).
-    ExchangeFailed,
+    /// The API key was valid but the account owes dues; see
+    /// `AuthState::PaymentRequired`.
+    PaymentRequired,
+    /// The API key was rejected as unusable; see `AuthState::InvalidApiKey`.
+    InvalidApiKey,
+    /// The server could not be reached; see `AuthState::ServerUnreachable`.
+    ServerUnreachable,
+    /// The server returned an unusable response; see
+    /// `AuthState::UnknownServerError`.
+    UnknownServerError,
+}
+
+/// The result of a single API key → JWT exchange attempt. Kept private: it's
+/// the common currency between `do_exchange` (which classifies the server's
+/// response) and the callers that turn a failure into the matching
+/// `AuthState`/`ClientError` pair (`classify_failure`).
+enum ExchangeOutcome {
+    /// The server issued a token and its claims parsed cleanly.
+    Success(TokenClaims),
+    /// Key valid, but dues are owed (HTTP `402`).
+    PaymentRequired,
+    /// Key rejected as unusable (HTTP `401`/`403`).
+    InvalidApiKey,
+    /// No response from the server at all.
+    ServerUnreachable,
+    /// A response arrived but couldn't be used.
+    UnknownServerError,
 }
 
 /// Configuration passed into `ProsperousClient::new`. Both fields are
@@ -88,7 +144,9 @@ impl ProsperousClient {
     }
 
     /// Resolves the client's `AuthState` by checking, in order: a cached
-    /// token on disk, then an API key exchange. Updates `self.state` to
+    /// token on disk, then an API key exchange, then — as a last resort when
+    /// no credentials are available — an interactive login that prompts the
+    /// user to paste a freshly generated API key. Updates `self.state` to
     /// reflect the outcome and returns `Ok(())` only when it lands in
     /// `AuthState::LoggedInCurrent`.
     pub async fn initialize(&mut self) -> Result<(), ClientError> {
@@ -101,62 +159,130 @@ impl ProsperousClient {
                     return Ok(());
                 }
 
-                // Cached token is expired; try to refresh it if we have a
-                // key, otherwise there's nothing more we can do with it.
+                // Cached token is expired. Refresh it with an API key if we
+                // have one; otherwise fall back to an interactive login,
+                // degrading to `LoggedInExpired` when we can't prompt.
                 return match self.effective_api_key() {
-                    Some(key) => {
-                        self.try_exchange(&key, AuthState::LoggedInExpired(claims))
-                            .await
-                    }
+                    Some(key) => self.try_exchange(&key).await,
                     None => {
-                        self.state = AuthState::LoggedInExpired(claims.clone());
-                        Err(ClientError::TokenExpired(claims))
+                        self.login_or_fail(
+                            AuthState::LoggedInExpired(claims.clone()),
+                            ClientError::TokenExpired(claims),
+                        )
+                        .await
                     }
                 };
             }
         }
 
         // 2. No usable cached token — try exchanging an API key for one.
-        match self.effective_api_key() {
-            Some(key) => {
-                self.state = AuthState::HasApiKey(key.clone());
-                self.try_exchange(&key, AuthState::NotLoggedIn).await
+        if let Some(key) = self.effective_api_key() {
+            return self.try_exchange(&key).await;
+        }
+
+        // 3. No credentials available at all: walk the user through logging
+        // in and pasting a key, degrading to `NotLoggedIn` when we can't
+        // prompt (piped input, CI, or an embedded non-CLI caller).
+        self.login_or_fail(AuthState::NotLoggedIn, ClientError::NotLoggedIn)
+            .await
+    }
+
+    /// Exchanges `api_key` for a JWT (setting the transient `HasApiKey`
+    /// state first) and records the outcome: `LoggedInCurrent` on success, or
+    /// the specific failure state paired with its `ClientError` otherwise.
+    /// Used for keys supplied non-interactively (env var / flag / cached
+    /// token refresh), which get a single attempt with no re-prompt.
+    async fn try_exchange(&mut self, api_key: &str) -> Result<(), ClientError> {
+        self.state = AuthState::HasApiKey(api_key.to_owned());
+        match self.do_exchange(api_key).await {
+            ExchangeOutcome::Success(claims) => {
+                self.state = AuthState::LoggedInCurrent(claims);
+                Ok(())
             }
-            None => {
-                // 3. No credentials available at all.
-                self.state = AuthState::NotLoggedIn;
-                Err(ClientError::NotLoggedIn)
+            failure => {
+                let (state, error) = classify_failure(failure);
+                self.state = state;
+                Err(error)
             }
         }
     }
 
-    /// Exchanges `api_key` for a JWT via the server and parses its claims.
-    /// Returns `None` on any failure: network error, non-2xx response, or an
-    /// unparseable token.
-    async fn exchange_for_claims(&self, api_key: &str) -> Option<TokenClaims> {
-        let token = self.do_exchange(api_key).await?;
-        parse_jwt_claims(&token)
+    /// Runs the interactive login when stdin is a terminal, otherwise records
+    /// `non_tty_state`/`non_tty_err` and returns without prompting. This is
+    /// what keeps the library usable from `node_client` and piped/CI
+    /// contexts: initialization stays non-blocking there and simply reports
+    /// that no credentials were found.
+    async fn login_or_fail(
+        &mut self,
+        non_tty_state: AuthState,
+        non_tty_err: ClientError,
+    ) -> Result<(), ClientError> {
+        if stdin_is_interactive() {
+            self.interactive_login().await
+        } else {
+            self.state = non_tty_state;
+            Err(non_tty_err)
+        }
     }
 
-    /// Attempts an exchange and updates `self.state` accordingly: to the
-    /// freshly obtained `LoggedInCurrent` claims on success, or to
-    /// `fallback_state` (paired with `ClientError::ExchangeFailed`) on
-    /// failure. Used by both exchange sites in `initialize` — refreshing an
-    /// expired cached token and exchanging a key with no cached token — which
-    /// differ only in what state to fall back to.
-    async fn try_exchange(
-        &mut self,
-        api_key: &str,
-        fallback_state: AuthState,
-    ) -> Result<(), ClientError> {
-        match self.exchange_for_claims(api_key).await {
-            Some(claims) => {
-                self.state = AuthState::LoggedInCurrent(claims);
-                Ok(())
+    /// Prompts the user to log in to the server, generate an API key, and
+    /// paste it back, then exchanges it. Re-prompts (up to
+    /// `MAX_LOGIN_ATTEMPTS`) only when the pasted key is rejected as invalid —
+    /// the other failure reasons (dues owed, server unreachable, unknown
+    /// error) can't be fixed by retyping, so they abort immediately.
+    async fn interactive_login(&mut self) -> Result<(), ClientError> {
+        // Show the "how to log in" instructions once, naming the server when
+        // we know it so the user knows where to go.
+        let server = self
+            .options
+            .base_url
+            .clone()
+            .unwrap_or_else(|| t!("login_server_generic").into_owned());
+        eprintln!("{}", t!("login_intro", url = server));
+
+        for attempt in 1..=MAX_LOGIN_ATTEMPTS {
+            eprint!("{}", t!("login_prompt"));
+            let _ = io::stderr().flush();
+
+            let key = match read_line_from_stdin() {
+                // EOF (e.g. the user hit Ctrl-D): stop asking.
+                None => break,
+                // Blank line: re-prompt without spending the attempt on an
+                // empty key we know can't succeed.
+                Some(key) if key.is_empty() => continue,
+                Some(key) => key,
+            };
+
+            self.state = AuthState::HasApiKey(key.clone());
+            match self.do_exchange(&key).await {
+                ExchangeOutcome::Success(claims) => {
+                    self.state = AuthState::LoggedInCurrent(claims);
+                    return Ok(());
+                }
+                // Only an invalid key is worth another paste.
+                ExchangeOutcome::InvalidApiKey => {
+                    self.state = AuthState::InvalidApiKey;
+                    if attempt < MAX_LOGIN_ATTEMPTS {
+                        eprintln!("{}", t!("login_invalid_retry"));
+                    }
+                }
+                // Dues owed / unreachable / unknown: report and stop.
+                failure => {
+                    let (state, error) = classify_failure(failure);
+                    self.state = state;
+                    return Err(error);
+                }
             }
-            None => {
-                self.state = fallback_state;
-                Err(ClientError::ExchangeFailed)
+        }
+
+        // Every attempt was rejected as invalid, or we hit EOF before any key
+        // was accepted. Preserve the last invalid-key state if that's how we
+        // got here; otherwise there was effectively no credential at all.
+        match self.state {
+            AuthState::InvalidApiKey => Err(ClientError::InvalidApiKey),
+            _ => {
+                self.state = AuthState::NotLoggedIn;
+                Err(ClientError::NotLoggedIn)
             }
         }
     }
@@ -181,34 +307,116 @@ impl ProsperousClient {
             .filter(|k| !k.is_empty())
     }
 
-    /// Calls `POST {base_url}/auth/exchange` with `api_key` and returns the
-    /// raw JWT string from the response, or `None` on any failure.
-    async fn do_exchange(&self, api_key: &str) -> Option<String> {
-        let base_url = self.options.base_url.as_deref()?.trim_end_matches('/');
+    /// Calls `POST {base_url}/auth/exchange` with `api_key` and classifies the
+    /// server's response into an `ExchangeOutcome`. The classification is the
+    /// heart of the failure-reason distinction:
+    ///
+    /// - no base URL / unparseable URL / transport error → `ServerUnreachable`
+    /// - HTTP `402` → `PaymentRequired`
+    /// - HTTP `401`/`403` → `InvalidApiKey`
+    /// - any other non-`2xx` → `UnknownServerError`
+    /// - `2xx` with a parseable JWT → `Success`; `2xx` otherwise →
+    ///   `UnknownServerError`
+    async fn do_exchange(&self, api_key: &str) -> ExchangeOutcome {
+        // Without a base URL there's nowhere to send the request.
+        let Some(base_url) = self.options.base_url.as_deref() else {
+            return ExchangeOutcome::ServerUnreachable;
+        };
+        let base_url = base_url.trim_end_matches('/');
         let url = format!("{base_url}/auth/exchange");
-        let uri: hyper::Uri = url.parse().ok()?;
+        let Ok(uri) = url.parse::<hyper::Uri>() else {
+            return ExchangeOutcome::ServerUnreachable;
+        };
 
-        let body = serde_json::json!({"api_key": api_key}).to_string();
-        let req = Request::builder()
+        let body = serde_json::json!({ "api_key": api_key }).to_string();
+        let request = Request::builder()
             .method("POST")
             .uri(&uri)
             .header("Content-Type", "application/json")
-            .body(Full::new(Bytes::from(body)))
-            .ok()?;
+            .body(Full::new(Bytes::from(body)));
+        let Ok(request) = request else {
+            // Building the request only fails on inputs we control, so this
+            // is an internal hiccup rather than a network condition.
+            return ExchangeOutcome::UnknownServerError;
+        };
 
-        let res = Client::builder(TokioExecutor::new())
+        // A transport-level failure means we never got an answer at all.
+        let response = match Client::builder(TokioExecutor::new())
             .build_http()
-            .request(req)
+            .request(request)
             .await
-            .ok()?;
+        {
+            Ok(response) => response,
+            Err(_) => return ExchangeOutcome::ServerUnreachable,
+        };
 
-        if !res.status().is_success() {
-            return None;
+        // Map the HTTP status to a specific outcome before reading the body.
+        match response.status() {
+            StatusCode::PAYMENT_REQUIRED => return ExchangeOutcome::PaymentRequired,
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                return ExchangeOutcome::InvalidApiKey
+            }
+            status if !status.is_success() => return ExchangeOutcome::UnknownServerError,
+            _ => {}
         }
 
-        let bytes = res.into_body().collect().await.ok()?.to_bytes();
-        let json: serde_json::Value = serde_json::from_slice(&bytes).ok()?;
-        Some(json["token"].as_str()?.to_owned())
+        // 2xx: the body should carry a parseable JWT. Anything else here is
+        // the server misbehaving rather than a credential problem.
+        let Ok(collected) = response.into_body().collect().await else {
+            return ExchangeOutcome::UnknownServerError;
+        };
+        let bytes = collected.to_bytes();
+        let token = serde_json::from_slice::<serde_json::Value>(&bytes)
+            .ok()
+            .and_then(|json| json["token"].as_str().map(str::to_owned));
+        match token.as_deref().and_then(parse_jwt_claims) {
+            Some(claims) => ExchangeOutcome::Success(claims),
+            None => ExchangeOutcome::UnknownServerError,
+        }
+    }
+}
+
+/// Maps a *non-success* `ExchangeOutcome` to the `(AuthState, ClientError)`
+/// pair that describes it. Both the non-interactive `try_exchange` and the
+/// interactive login funnel their failure handling through here so the
+/// outcome → state → error mapping lives in exactly one place.
+///
+/// Panics if handed `Success`; callers always handle the success case
+/// themselves (they need the claims), so this is unreachable in practice.
+fn classify_failure(outcome: ExchangeOutcome) -> (AuthState, ClientError) {
+    match outcome {
+        ExchangeOutcome::PaymentRequired => {
+            (AuthState::PaymentRequired, ClientError::PaymentRequired)
+        }
+        ExchangeOutcome::InvalidApiKey => (AuthState::InvalidApiKey, ClientError::InvalidApiKey),
+        ExchangeOutcome::ServerUnreachable => {
+            (AuthState::ServerUnreachable, ClientError::ServerUnreachable)
+        }
+        ExchangeOutcome::UnknownServerError => {
+            (AuthState::UnknownServerError, ClientError::UnknownServerError)
+        }
+        ExchangeOutcome::Success(_) => {
+            unreachable!("classify_failure is only called with a failed exchange outcome")
+        }
+    }
+}
+
+/// Whether stdin is an interactive terminal. The interactive login only makes
+/// sense when a human can actually type a key; in non-interactive contexts
+/// (pipes, CI, or the `node_client` addon embedded in another process) we
+/// skip the prompt so initialization never blocks on stdin.
+fn stdin_is_interactive() -> bool {
+    io::stdin().is_terminal()
+}
+
+/// Reads a single trimmed line from stdin. Returns `None` on EOF or a read
+/// error (so the login loop can stop cleanly) and `Some("")` for a blank
+/// line (so the loop can re-prompt rather than treating it as a key).
+fn read_line_from_stdin() -> Option<String> {
+    let mut line = String::new();
+    match io::stdin().lock().read_line(&mut line) {
+        Ok(0) | Err(_) => None,
+        Ok(_) => Some(line.trim().to_owned()),
     }
 }
 
@@ -282,4 +490,29 @@ fn is_expired(exp: i64) -> bool {
         .map(|d| d.as_secs() as i64)
         .unwrap_or(i64::MAX);
     now >= exp
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_failure_maps_each_outcome_to_its_state_and_error() {
+        assert!(matches!(
+            classify_failure(ExchangeOutcome::PaymentRequired),
+            (AuthState::PaymentRequired, ClientError::PaymentRequired)
+        ));
+        assert!(matches!(
+            classify_failure(ExchangeOutcome::InvalidApiKey),
+            (AuthState::InvalidApiKey, ClientError::InvalidApiKey)
+        ));
+        assert!(matches!(
+            classify_failure(ExchangeOutcome::ServerUnreachable),
+            (AuthState::ServerUnreachable, ClientError::ServerUnreachable)
+        ));
+        assert!(matches!(
+            classify_failure(ExchangeOutcome::UnknownServerError),
+            (AuthState::UnknownServerError, ClientError::UnknownServerError)
+        ));
+    }
 }

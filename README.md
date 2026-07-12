@@ -36,6 +36,8 @@ cargo run -p mock_server
 # Listening on 0.0.0.0:3000
 ```
 
+`/auth/exchange` recognizes a few **sentinel API keys** to exercise the client's failure paths: `unpaid-dues` → `402 Payment Required`, `invalid-key` → `401 Unauthorized`, `server-error` → `500`. Any other non-empty key is exchanged for a valid token.
+
 ---
 
 ## Running the Rust client
@@ -54,6 +56,8 @@ cargo run -p client -- --prosperous-key my-api-key --base-url http://localhost:3
 # See all options
 cargo run -p client -- --help
 ```
+
+If you have neither a cached token nor an API key, the client walks you through logging in: it prints instructions to sign in on the server and generate an API key, then waits for you to paste it. An invalid key re-prompts (up to 3 times); dues owed, an unreachable server, or an unknown server error are reported without retrying. This interactive prompt only appears when stdin is a terminal — piped/CI runs and the Node addon report `NotLoggedIn` instead of blocking.
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
 
@@ -98,7 +102,8 @@ try {
   // state: { type: 'LoggedInCurrent', email, orgId, exp }
   console.log(`Logged in as ${state.email} (org: ${state.orgId})`);
 } catch (err) {
-  // err.code: 'NotLoggedIn' | 'TokenExpired' | 'ExchangeFailed'
+  // err.code: 'NotLoggedIn' | 'TokenExpired' | 'PaymentRequired'
+  //         | 'InvalidApiKey' | 'ServerUnreachable' | 'UnknownServerError'
   console.error(`Auth failed [${err.code}]: ${err.message}`);
 }
 

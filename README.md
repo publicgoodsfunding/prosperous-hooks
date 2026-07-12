@@ -55,11 +55,7 @@ cargo run -p client -- --prosperous-key my-api-key --base-url http://localhost:3
 cargo run -p client -- --help
 ```
 
-### Auth resolution order
-
-1. Looks for a cached JWT in `.prosperous/token`, walking up from the current directory to `$HOME`.
-2. If no token file is found, exchanges `PROSPEROUS_KEY` / `--prosperous-key` for a JWT via `POST /auth/exchange` against `PROSPEROUS_BASE_URL` / `--base-url`.
-3. Prints `Error: not logged in` and exits 1 if neither credential is available.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the full auth resolution order and state machine.
 
 ---
 
@@ -145,21 +141,6 @@ cargo test
 
 ---
 
-## JWT token format
+## Further reading
 
-Tokens issued by the mock server (and expected by the client) are HS256 JWTs with the following claims:
-
-```json
-{
-  "email":  "user@example.com",
-  "org_id": "test-org",
-  "exp":    1234567890
-}
-```
-
-To cache a token manually, write it to `.prosperous/token` in any ancestor directory up to `$HOME`:
-
-```bash
-mkdir -p .prosperous
-echo "<jwt>" > .prosperous/token
-```
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the client's auth state machine and the client/server protocol, including the JWT token format.
